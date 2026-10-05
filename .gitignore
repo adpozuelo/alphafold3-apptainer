@@ -7,3 +7,4 @@ test_output/
 cache/
 __pycache__/
 .ipynb_checkpoints/
+make_readme.py
