@@ -1,0 +1,58 @@
+#!/bin/bash
+set -e
+
+AF3_CONTAINER="${AF3_CONTAINER:-/opt/alphafold3/container/alphafold3.sif}"
+AF3_DB="${AF3_DB:-/opt/alphafold3/public_databases}"
+AF3_MODELS="${AF3_MODELS:-/opt/alphafold3/models}"
+
+USER_JSON_PATH=""
+USER_OUTPUT_DIR="$(pwd)/output"
+USER_MODEL_DIR="$AF3_MODELS"
+USER_DB_DIR="$AF3_DB"
+EXTRA_ARGS=()
+
+for arg in "$@"; do
+    case "$arg" in
+        --json_path=*) USER_JSON_PATH="${arg#*=}" ;;
+        --output_dir=*) USER_OUTPUT_DIR="${arg#*=}" ;;
+        --model_dir=*) USER_MODEL_DIR="${arg#*=}" ;;
+        --db_dir=*) USER_DB_DIR="${arg#*=}" ;;
+        *) EXTRA_ARGS+=("$arg") ;;
+    esac
+done
+
+if [ -z "$USER_JSON_PATH" ]; then
+    echo "Error: Debes especificar --json_path=<archivo.json>"
+    echo "Uso: alphafold3 --json_path=input.json [--output_dir=./output] [--run_data_pipeline=false] [--run_inference=false]"
+    exit 1
+fi
+
+ABS_JSON_PATH=$(readlink -f "$USER_JSON_PATH")
+ABS_JSON_DIR=$(dirname "$ABS_JSON_PATH")
+JSON_FILE_NAME=$(basename "$ABS_JSON_PATH")
+
+ABS_OUTPUT_DIR=$(readlink -f "$USER_OUTPUT_DIR")
+mkdir -p "$ABS_OUTPUT_DIR"
+
+ABS_MODEL_DIR=$(readlink -f "$USER_MODEL_DIR")
+ABS_DB_DIR=$(readlink -f "$USER_DB_DIR")
+
+BASE_TMPDIR="${TMPDIR:-/tmp}"
+WORK_TMP="${BASE_TMPDIR}/af3_tmp_${USER}_$$"
+mkdir -p "$WORK_TMP"
+trap 'rm -rf "$WORK_TMP"' EXIT
+
+exec apptainer exec --nv \
+    --bind "$ABS_DB_DIR":/root/public_databases \
+    --bind "$ABS_MODEL_DIR":/root/models \
+    --bind "$ABS_JSON_DIR":/root/af_input:ro \
+    --bind "$ABS_OUTPUT_DIR":/root/af_output \
+    --bind "$WORK_TMP":/tmp \
+    --pwd /app/alphafold \
+    "$AF3_CONTAINER" \
+    /alphafold3_venv/bin/python3 /app/alphafold/run_alphafold.py \
+    --db_dir=/root/public_databases \
+    --model_dir=/root/models \
+    --output_dir=/root/af_output \
+    --json_path="/root/af_input/${JSON_FILE_NAME}" \
+    "${EXTRA_ARGS[@]}"

@@ -1,0 +1,71 @@
+Bootstrap: docker
+From: nvidia/cuda:12.6.3-base-ubuntu24.04
+
+%files
+    . /app/alphafold
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+
+    # 1. Dependencias del sistema y compiladores (Python 3.12 nativo en Ubuntu 24.04)
+    apt-get update --quiet && apt-get install --yes --quiet \
+        python3.12 \
+        python3.12-dev \
+        python3.12-venv \
+        git \
+        wget \
+        gcc \
+        g++ \
+        make \
+        patch \
+        zlib1g-dev \
+        zstd \
+        ca-certificates
+
+    # 2. Instalar gestor Astral 'uv'
+    wget -qO- https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
+
+    # 3. Descarga y compilación de HMMER 3.4 con el parche oficial de DeepMind
+    mkdir -p /hmmer_build /hmmer
+    wget http://eddylab.org/software/hmmer/hmmer-3.4.tar.gz --directory-prefix /hmmer_build --quiet
+    cd /hmmer_build
+    echo "ca70d94fd0cf271bd7063423aabb116d42de533117343a9b27a65c17ff06fbf3 hmmer-3.4.tar.gz" | sha256sum --check
+    tar zxf hmmer-3.4.tar.gz
+    rm hmmer-3.4.tar.gz
+
+    # Aplicar parche jackhmmer_seq_limit
+    cp /app/alphafold/docker/jackhmmer_seq_limit.patch /hmmer_build/
+    patch -p0 < jackhmmer_seq_limit.patch
+
+    # Compilar con optimizaciones AVX-512 nativas del AMD EPYC
+    cd hmmer-3.4
+    ./configure --prefix=/hmmer
+    make -j16
+    make install
+    cd easel
+    make install
+    rm -rf /hmmer_build
+
+    # 4. Configurar el entorno virtual con uv
+    cd /app/alphafold
+    export UV_COMPILE_BYTECODE=1
+    export UV_PROJECT_ENVIRONMENT=/alphafold3_venv
+    uv venv $UV_PROJECT_ENVIRONMENT --python python3.12
+
+    export PATH="/hmmer/bin:/alphafold3_venv/bin:$PATH"
+
+    # Sincronizar dependencias fijadas por DeepMind
+    uv sync --frozen --all-groups --no-editable
+
+    # 5. Generar la base de componentes químicos interna
+    uv run build_data
+
+%environment
+    export PATH="/hmmer/bin:/alphafold3_venv/bin:$PATH"
+    export XLA_FLAGS="--xla_gpu_enable_triton_gemm=false"
+    export XLA_PYTHON_CLIENT_PREALLOCATE=true
+    export XLA_CLIENT_MEM_FRACTION=0.95
+
+%runscript
+    cd /app/alphafold
+    exec /alphafold3_venv/bin/python3 run_alphafold.py "$@"

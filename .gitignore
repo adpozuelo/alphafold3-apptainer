@@ -1,0 +1,9 @@
+*.sif
+*.bin
+*.zstd
+*.tar.gz
+output/
+test_output/
+cache/
+__pycache__/
+.ipynb_checkpoints/
